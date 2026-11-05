@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """台幣匯率 LINE 通知
 
-每天抓臺灣銀行美元牌告匯率，跟上一次紀錄比較，用 LINE Messaging API 推播：
+每天抓玉山銀行美元即期牌告匯率（臺銀網站擋海外伺服器），跟上一次紀錄比較，用 LINE Messaging API 推播：
   - 台幣今天升值或貶值多少
   - 距離你的「換美元目標匯率」還差多少，達標時特別提醒
   - 單日大幅升貶時加註提醒
@@ -14,63 +14,67 @@
   BIG_MOVE_PCT               單日升貶超過幾 % 算大幅波動，預設 0.5
   HISTORY_FILE               歷史紀錄檔，預設 fx_history.json
   DRY_RUN                    設為 1 時只印出訊息、不送 LINE
-  SAMPLE_CSV                 測試用：指定一個本機 CSV 檔取代線上抓取
+  SAMPLE_JSON                測試用：指定一個本機玉山 API JSON 檔取代線上抓取
 """
 
-import csv
-import io
 import json
 import os
 import sys
 import urllib.request
 from datetime import datetime, timedelta, timezone
 
-BOT_CSV_URL = "https://rate.bot.com.tw/xrt/flcsv/0/day"
+# 臺灣銀行網站對海外伺服器（GitHub 機房在美國）會跳出機器人驗證頁，抓不到 CSV，
+# 所以改用玉山銀行公開的牌告匯率 API；兩家銀行的即期牌告通常只差幾分錢。
+ESUN_URL = "https://www.esunbank.com/api/client/ExchangeRate/LastRateInfo"
 FALLBACK_URL = "https://open.er-api.com/v6/latest/USD"
 LINE_BROADCAST_URL = "https://api.line.me/v2/bot/message/broadcast"
 TW = timezone(timedelta(hours=8))
-UA = {"User-Agent": "fx-line-notify/1.0"}
+UA = {"User-Agent": "Mozilla/5.0 (compatible; fx-line-notify/1.1)"}
 
 
-def http_get(url, timeout=20):
-    req = urllib.request.Request(url, headers=UA)
+def http_get(url, timeout=20, data=None):
+    headers = dict(UA)
+    if data is not None:
+        headers["Content-Type"] = "application/json"
+    req = urllib.request.Request(url, headers=headers, data=data, method="POST" if data else "GET")
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return r.read()
 
 
-def parse_bot_csv(text):
-    """回傳 (即期買入, 即期賣出)。臺銀 CSV 每列：幣別,本行買入,現金,即期,...,本行賣出,現金,即期,..."""
-    for row in csv.reader(io.StringIO(text)):
-        if not row or row[0].strip() != "USD":
-            continue
-        cells = [c.strip() for c in row]
-        buy_i = cells.index("本行買入")
-        sell_i = cells.index("本行賣出")
-        spot_buy = float(cells[buy_i + 2])
-        spot_sell = float(cells[sell_i + 2])
-        if spot_buy <= 0 or spot_sell <= 0:
-            raise ValueError("臺銀 USD 即期匯率為 0")
-        return spot_buy, spot_sell
-    raise ValueError("臺銀 CSV 找不到 USD")
+def parse_esun(data):
+    """玉山 API：Rates 裡 CCY 為 USD/TWD 那筆。BBoardRate/SBoardRate＝即期買入/賣出。"""
+    for r in data.get("Rates", []):
+        if r.get("CCY") == "USD/TWD":
+            spot_buy, spot_sell = float(r["BBoardRate"]), float(r["SBoardRate"])
+            if not (20 < spot_buy < 45 and 20 < spot_sell < 45):
+                raise ValueError(f"玉山 USD 匯率不合理：{spot_buy}/{spot_sell}")
+            cash_sell = r.get("CashSBoardRate")
+            ts = ""
+            m = str(r.get("UpdateTime", ""))
+            if m.startswith("/Date(") and m[6:-2].isdigit():
+                ts = datetime.fromtimestamp(int(m[6:-2]) / 1000, TW).strftime("%m/%d %H:%M")
+            return {"spot_buy": spot_buy, "spot_sell": spot_sell,
+                    "cash_sell": float(cash_sell) if cash_sell not in (None, "", "-") else None,
+                    "updated": ts, "source": "玉山銀行牌告", "source_key": "esun"}
+    raise ValueError("玉山 API 找不到 USD/TWD")
 
 
 def fetch_rate():
-    """優先用臺灣銀行牌告；抓不到時改用國際中間價（並在訊息註明來源）。"""
-    sample = os.environ.get("SAMPLE_CSV")
+    """優先用玉山銀行即期牌告；抓不到時改用國際中間價（並在訊息註明是估算）。"""
+    sample = os.environ.get("SAMPLE_JSON")
     if sample:
-        with open(sample, encoding="utf-8-sig") as f:
-            buy, sell = parse_bot_csv(f.read())
-        return {"spot_buy": buy, "spot_sell": sell, "source": "臺灣銀行（測試檔）"}
+        with open(sample, encoding="utf-8") as f:
+            return parse_esun(json.load(f))
     try:
-        buy, sell = parse_bot_csv(http_get(BOT_CSV_URL).decode("utf-8-sig"))
-        return {"spot_buy": buy, "spot_sell": sell, "source": "臺灣銀行即期"}
+        return parse_esun(json.loads(http_get(ESUN_URL, data=b"{}")))
     except Exception as e:  # noqa: BLE001
-        print(f"臺銀匯率抓取失敗，改用備援：{e}", file=sys.stderr)
+        print(f"玉山匯率抓取失敗，改用備援：{e}", file=sys.stderr)
     data = json.loads(http_get(FALLBACK_URL))
     mid = float(data["rates"]["TWD"])
-    # 備援只有中間價，用常見價差 0.1 元估算買賣價
+    # 備援只有中間價（每天更新一次），用常見價差 0.1 元估算買賣價
     return {"spot_buy": round(mid - 0.05, 3), "spot_sell": round(mid + 0.05, 3),
-            "source": "國際中間價（臺銀暫時抓不到，數字為估算）"}
+            "cash_sell": None, "updated": "",
+            "source": "國際中間價（銀行牌告暫時抓不到，數字為估算）", "source_key": "estimate"}
 
 
 def load_history(path):
@@ -90,7 +94,10 @@ def save_history(path, history):
 def build_message(today, rate, prev, history, target, big_pct):
     sell = rate["spot_sell"]
     md = f"{today.month}/{today.day}"
-    lines = [f"💱 台幣匯率 {md}", f"美元即期賣出：{sell:.3f}"]
+    when = f"（{rate['updated']} 掛牌）" if rate.get("updated") else ""
+    lines = [f"💱 台幣匯率 {md}", f"美元即期賣出：{sell:.3f}{when}"]
+    if rate.get("cash_sell"):
+        lines.append(f"現金賣出：{rate['cash_sell']:.3f}（領美金現鈔才用這個）")
 
     if prev:
         diff = sell - prev["spot_sell"]
@@ -107,7 +114,8 @@ def build_message(today, rate, prev, history, target, big_pct):
     else:
         lines.append("（第一筆紀錄，明天起會顯示升貶）")
 
-    recent = [h["spot_sell"] for h in history[-20:]]
+    same = [h for h in history if h.get("source_key") == rate.get("source_key")]
+    recent = [h["spot_sell"] for h in same[-20:]]
     if len(recent) >= 5:
         lines.append(f"近 {len(recent)} 筆：最強 {min(recent):.3f}／最弱 {max(recent):.3f}")
 
@@ -116,8 +124,7 @@ def build_message(today, rate, prev, history, target, big_pct):
     else:
         lines.append(f"距離目標 {target:.2f} 還差 {sell - target:.2f} 元")
 
-    if "估算" in rate["source"]:
-        lines.append(f"資料來源：{rate['source']}")
+    lines.append(f"資料來源：{rate['source']}")
     return "\n".join(lines)
 
 
@@ -147,15 +154,17 @@ def main():
     today_s = now.strftime("%Y-%m-%d")
     rate = fetch_rate()
     history = [h for h in load_history(hist_path) if h.get("date") != today_s]
-    prev = history[-1] if history else None
+    # 只和同一個來源的紀錄比較，避免銀行牌告和估算值互比造成假升貶
+    same = [h for h in history if h.get("source_key") == rate["source_key"]]
+    prev = same[-1] if same else None
 
-    # 國定假日臺銀不掛新牌價，數字會和上次完全一樣：不重複通知
+    # 國定假日銀行不掛新牌價，數字會和上次完全一樣：不重複通知
     if prev and prev.get("spot_sell") == rate["spot_sell"] and prev.get("spot_buy") == rate["spot_buy"]:
         print(f"匯率與 {prev['date']} 完全相同（可能是假日），不通知")
         return
 
-    history.append({"date": today_s, "spot_buy": rate["spot_buy"],
-                    "spot_sell": rate["spot_sell"], "source": rate["source"]})
+    history.append({"date": today_s, "spot_buy": rate["spot_buy"], "spot_sell": rate["spot_sell"],
+                    "source": rate["source"], "source_key": rate["source_key"]})
     msg = build_message(now, rate, prev, history, target, big_pct)
     print(msg)
     if dry:
