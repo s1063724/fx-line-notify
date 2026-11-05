@@ -5,8 +5,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - run: |
-          curl -sS -A "fx-line-notify/1.0" -D - -o out.bin https://rate.bot.com.tw/xrt/flcsv/0/day | head -20
-          echo "---size"; wc -c out.bin; file out.bin
-          echo "---head"; head -c 600 out.bin | iconv -f utf-8 -t utf-8 -c; echo
-          echo "---usd"; grep -a -n "USD" out.bin | head -3
-          echo "---bytes"; head -c 120 out.bin | xxd | head -8
+          UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36"
+          echo "=== BOT browser UA"; curl -sS -A "$UA" -H "Accept-Language: zh-TW" https://rate.bot.com.tw/xrt/flcsv/0/day | head -c 300; echo
+          echo "=== ESUN"; curl -sS -A "$UA" -X POST -H "Content-Type: application/json" -d '{}' https://www.esunbank.com/api/client/ExchangeRate/LastRateInfo | head -c 800; echo
+          echo "=== YAHOO"; curl -sS -A "$UA" "https://query1.finance.yahoo.com/v8/finance/chart/TWD=X?range=1d&interval=1d" | head -c 600; echo
+          echo "=== ERAPI"; curl -sS https://open.er-api.com/v6/latest/USD | python3 -c "import sys,json;d=json.load(sys.stdin);print(d['rates']['TWD'],d['time_last_update_utc'])"
+          echo "=== MEGA"; curl -sS -A "$UA" "https://www.megabank.com.tw/api/client/ExchangeRate/getExchangeRate" | head -c 400; echo
+          echo "=== FIRST"; curl -sS -A "$UA" "https://ibank.firstbank.com.tw/NetBank/7/0201.html?sh=none" | grep -a -o "USD.\{0,300\}" | head -c 500; echo
