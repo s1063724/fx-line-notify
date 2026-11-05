@@ -1,0 +1,11 @@
+name: debug-src
+on: workflow_dispatch
+jobs:
+  d:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36"
+          echo "=== findrate"; curl -sS -A "$UA" https://www.findrate.tw/USD/ -o f.html; wc -c f.html; grep -a -o "臺灣銀行.\{0,400\}" f.html | head -c 700; echo
+          echo "=== bot fltxt"; curl -sS -A "$UA" https://rate.bot.com.tw/xrt/fltxt/0/day | head -c 150; echo
+          echo "=== bot quote"; curl -sS -A "$UA" "https://rate.bot.com.tw/xrt/quote/day/USD" | head -c 150; echo
