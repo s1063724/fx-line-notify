@@ -1,0 +1,39 @@
+name: 台幣匯率 LINE 通知
+
+on:
+  schedule:
+    # GitHub 用 UTC 時間：08:40 UTC = 台灣 16:40（週一到週五，台北外匯收盤後）
+    - cron: "40 8 * * 1-5"
+  workflow_dispatch: {}   # 可在 Actions 頁面手動按「Run workflow」測試
+
+permissions:
+  contents: write         # 需要把匯率紀錄存回 repo
+
+concurrency:
+  group: fx-notify
+  cancel-in-progress: false
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 抓匯率並送 LINE
+        env:
+          LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
+          TARGET_RATE: ${{ vars.TARGET_RATE || '31.5' }}
+          BIG_MOVE_PCT: ${{ vars.BIG_MOVE_PCT || '0.5' }}
+        run: python fx_notify.py
+
+      - name: 存回匯率紀錄
+        run: |
+          git config user.name "fx-bot"
+          git config user.email "fx-bot@users.noreply.github.com"
+          git add fx_history.json
+          git diff --cached --quiet || git commit -m "匯率紀錄 $(TZ=Asia/Taipei date +%F)"
+          git push
