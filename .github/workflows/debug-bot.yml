@@ -1,0 +1,12 @@
+name: debug-bot-csv
+on: workflow_dispatch
+jobs:
+  d:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          curl -sS -A "fx-line-notify/1.0" -D - -o out.bin https://rate.bot.com.tw/xrt/flcsv/0/day | head -20
+          echo "---size"; wc -c out.bin; file out.bin
+          echo "---head"; head -c 600 out.bin | iconv -f utf-8 -t utf-8 -c; echo
+          echo "---usd"; grep -a -n "USD" out.bin | head -3
+          echo "---bytes"; head -c 120 out.bin | xxd | head -8
