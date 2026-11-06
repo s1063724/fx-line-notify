@@ -5,5 +5,12 @@
   "spot_sell": 33.02,
   "source": "玉山銀行牌告",
   "source_key": "esun"
+ },
+ {
+  "date": "2026-11-07",
+  "spot_buy": 32.75,
+  "spot_sell": 32.85,
+  "source": "玉山銀行牌告",
+  "source_key": "esun"
  }
 ]
